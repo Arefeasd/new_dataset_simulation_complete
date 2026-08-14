@@ -1,0 +1,1611 @@
+library(dplyr)
+library(lubridate)
+
+set.seed(20260814)
+
+# ============================================================
+# PARAMETERS
+# ============================================================
+
+N_patient <- 20553
+N_large   <- 26091
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+# Create binary variable with an exact number of 1s
+make_binary <- function(n, n_one) {
+  
+  x <- rep(0L, n)
+  
+  id <- sample(
+    seq_len(n),
+    size = n_one,
+    replace = FALSE
+  )
+  
+  x[id] <- 1L
+  
+  x
+}
+
+
+# Add an approximate specified percentage of missing values
+add_missing <- function(x, pct) {
+  
+  n_missing <- round(
+    length(x) * pct / 100
+  )
+  
+  id <- sample(
+    seq_along(x),
+    size = n_missing,
+    replace = FALSE
+  )
+  
+  x[id] <- NA
+  
+  x
+}
+
+
+# Simulate a continuous variable approximately matching
+# the requested Q1, median and Q3
+simulate_iqr <- function(
+    n,
+    q1,
+    median,
+    q3,
+    lower = -Inf,
+    upper = Inf
+) {
+  
+  z <- rnorm(n)
+  
+  x <- ifelse(
+    z < 0,
+    median + z * (median - q1) / 0.67449,
+    median + z * (q3 - median) / 0.67449
+  )
+  
+  x <- pmax(x, lower)
+  x <- pmin(x, upper)
+  
+  x
+}
+
+
+# Split one parent binary variable into subcodes
+split_parent_code <- function(
+    parent,
+    code_names,
+    probabilities
+) {
+  
+  ids <- which(parent == 1)
+  
+  type <- sample(
+    code_names,
+    size = length(ids),
+    replace = TRUE,
+    prob = probabilities
+  )
+  
+  output <- as.data.frame(
+    matrix(
+      0L,
+      nrow = length(parent),
+      ncol = length(code_names)
+    )
+  )
+  
+  names(output) <- code_names
+  
+  for (code in code_names) {
+    
+    output[
+      ids[type == code],
+      code
+    ] <- 1L
+  }
+  
+  output
+}
+
+
+# ============================================================
+# PATIENT ID
+# ============================================================
+
+patient_id <- seq_len(N_patient)
+
+
+# ============================================================
+# GENDER
+# Exact Table 1 counts:
+# F = 10944
+# M = 9609
+# ============================================================
+
+gender <- c(
+  rep("F", 10944),
+  rep("M", 9609)
+)
+
+gender <- sample(gender)
+
+
+# ============================================================
+# OMT AND TREATMENT COMPONENTS
+#
+# Exact targets:
+#
+# beta_blocker = 3889
+# ACE          = 2637
+# ARB          = 2097
+# Aldosterone  = 622
+#
+# OMT:
+# 0 = 14023
+# 1 = 4153
+# 2 = 2185
+# 3 = 192
+# ============================================================
+
+omt_pattern <- bind_rows(
+  
+  tibble(
+    beta_blocker = rep(0L, 14023),
+    RAAS         = rep(0L, 14023),
+    Aldosterone  = rep(0L, 14023)
+  ),
+  
+  tibble(
+    beta_blocker = rep(1L, 1612),
+    RAAS         = rep(0L, 1612),
+    Aldosterone  = rep(0L, 1612)
+  ),
+  
+  tibble(
+    beta_blocker = rep(0L, 2311),
+    RAAS         = rep(1L, 2311),
+    Aldosterone  = rep(0L, 2311)
+  ),
+  
+  tibble(
+    beta_blocker = rep(0L, 230),
+    RAAS         = rep(0L, 230),
+    Aldosterone  = rep(1L, 230)
+  ),
+  
+  tibble(
+    beta_blocker = rep(1L, 1985),
+    RAAS         = rep(1L, 1985),
+    Aldosterone  = rep(0L, 1985)
+  ),
+  
+  tibble(
+    beta_blocker = rep(1L, 100),
+    RAAS         = rep(0L, 100),
+    Aldosterone  = rep(1L, 100)
+  ),
+  
+  tibble(
+    beta_blocker = rep(0L, 100),
+    RAAS         = rep(1L, 100),
+    Aldosterone  = rep(1L, 100)
+  ),
+  
+  tibble(
+    beta_blocker = rep(1L, 192),
+    RAAS         = rep(1L, 192),
+    Aldosterone  = rep(1L, 192)
+  )
+)
+
+omt_pattern <- omt_pattern |>
+  slice_sample(prop = 1)
+
+beta_blocker <- omt_pattern$beta_blocker
+RAAS         <- omt_pattern$RAAS
+Aldosterone  <- omt_pattern$Aldosterone
+
+OMT <- beta_blocker + RAAS + Aldosterone
+
+
+# ------------------------------------------------------------
+# ACE and ARB
+#
+# ACE = 2637
+# ARB = 2097
+#
+# Union ACE/ARB = 4588
+# overlap = 146
+# ------------------------------------------------------------
+
+ACE <- rep(0L, N_patient)
+ARB <- rep(0L, N_patient)
+
+raas_id <- sample(
+  which(RAAS == 1)
+)
+
+both_id <- raas_id[1:146]
+
+ace_only_id <- raas_id[
+  147:(146 + 2491)
+]
+
+arb_only_id <- raas_id[
+  (146 + 2491 + 1):length(raas_id)
+]
+
+ACE[both_id] <- 1L
+ARB[both_id] <- 1L
+
+ACE[ace_only_id] <- 1L
+ARB[arb_only_id] <- 1L
+
+
+# ============================================================
+# CARDIOVASCULAR HISTORY
+#
+# Exact Table 1 counts:
+#
+# ischemic heart disease = 1531
+# atrial fibrillation    = 3106
+# chronic heart failure  = 2696
+# cv_history             = 5559
+# ============================================================
+
+cv_pattern <- bind_rows(
+  
+  tibble(
+    IHD = rep(0L, 14994),
+    AF  = rep(0L, 14994),
+    CHF = rep(0L, 14994)
+  ),
+  
+  tibble(
+    IHD = rep(1L, 631),
+    AF  = rep(0L, 631),
+    CHF = rep(0L, 631)
+  ),
+  
+  tibble(
+    IHD = rep(0L, 1932),
+    AF  = rep(1L, 1932),
+    CHF = rep(0L, 1932)
+  ),
+  
+  tibble(
+    IHD = rep(0L, 1522),
+    AF  = rep(0L, 1522),
+    CHF = rep(1L, 1522)
+  ),
+  
+  tibble(
+    IHD = rep(1L, 300),
+    AF  = rep(1L, 300),
+    CHF = rep(0L, 300)
+  ),
+  
+  tibble(
+    IHD = rep(1L, 300),
+    AF  = rep(0L, 300),
+    CHF = rep(1L, 300)
+  ),
+  
+  tibble(
+    IHD = rep(0L, 574),
+    AF  = rep(1L, 574),
+    CHF = rep(1L, 574)
+  ),
+  
+  tibble(
+    IHD = rep(1L, 300),
+    AF  = rep(1L, 300),
+    CHF = rep(1L, 300)
+  )
+)
+
+cv_pattern <- cv_pattern |>
+  slice_sample(prop = 1)
+
+ischemic_heart_disease <-
+  cv_pattern$IHD
+
+atrial_fibrillation <-
+  cv_pattern$AF
+
+chronic_heart_failure <-
+  cv_pattern$CHF
+
+cv_history <- ifelse(
+  ischemic_heart_disease == 1 |
+    atrial_fibrillation == 1 |
+    chronic_heart_failure == 1,
+  1L,
+  0L
+)
+
+
+# ============================================================
+# OTHER BINARY VARIABLES
+# ============================================================
+
+hypertension_cum <- make_binary(
+  N_patient,
+  4327
+)
+
+Ins_Resp_Aigue_J96 <- make_binary(
+  N_patient,
+  4764
+)
+
+
+# ============================================================
+# SEVERITY
+# Exact total = 6276
+# ============================================================
+
+severity <- rep(
+  0L,
+  N_patient
+)
+
+severity[
+  Ins_Resp_Aigue_J96 == 1
+] <- 1L
+
+additional_severity <- sample(
+  which(Ins_Resp_Aigue_J96 == 0),
+  size = 6276 - 4764,
+  replace = FALSE
+)
+
+severity[
+  additional_severity
+] <- 1L
+
+
+# ============================================================
+# CONTINUOUS VARIABLES
+# ============================================================
+
+AGE <- simulate_iqr(
+  N_patient,
+  q1 = 83.64,
+  median = 87.25,
+  q3 = 91.10,
+  lower = 80.01,
+  upper = 105
+)
+
+
+oxygene_first <- simulate_iqr(
+  N_patient,
+  q1 = 54.90,
+  median = 68,
+  q3 = 86,
+  lower = 20,
+  upper = 100
+)
+
+
+hemoglobine_first <- simulate_iqr(
+  N_patient,
+  q1 = 11.50,
+  median = 13,
+  q3 = 15,
+  lower = 4,
+  upper = 22
+)
+
+
+creatinine_first <- simulate_iqr(
+  N_patient,
+  q1 = 66,
+  median = 87,
+  q3 = 120,
+  lower = 20,
+  upper = 800
+)
+
+
+leucocytes_max <- simulate_iqr(
+  N_patient,
+  q1 = 9.10,
+  median = 12.40,
+  q3 = 16.90,
+  lower = 1,
+  upper = 60
+)
+
+
+ph_min <- rnorm(
+  N_patient,
+  mean = 7.40,
+  sd = 0.09
+)
+
+ph_min <- pmin(
+  pmax(ph_min, 6.8),
+  7.7
+)
+
+
+# ============================================================
+# MISSING DATA
+#
+# Exact percentages supplied by the user
+# ============================================================
+
+oxygene_first <- add_missing(
+  oxygene_first,
+  47.7
+)
+
+ph_min <- add_missing(
+  ph_min,
+  47.6
+)
+
+hemoglobine_first <- add_missing(
+  hemoglobine_first,
+  10.7
+)
+
+creatinine_first <- add_missing(
+  creatinine_first,
+  10.5
+)
+
+leucocytes_max <- add_missing(
+  leucocytes_max,
+  10.6
+)
+
+
+# ============================================================
+# SCORES
+#
+# Full empirical distributions were not supplied.
+# Therefore these are synthetic approximations.
+# ============================================================
+
+HFRS_score <- pmax(
+  0,
+  round(
+    rgamma(
+      N_patient,
+      shape = 0.75,
+      scale = 5
+    ) - 1,
+    1
+  )
+)
+
+
+ELIX_score <- pmax(
+  0,
+  round(
+    rgamma(
+      N_patient,
+      shape = 0.8,
+      scale = 8
+    ) - 2,
+    1
+  )
+)
+
+
+CCI_score <- pmax(
+  0,
+  round(
+    rgamma(
+      N_patient,
+      shape = 0.6,
+      scale = 1.2
+    ) - 0.3
+  )
+)
+
+
+# ============================================================
+# DATES
+# ============================================================
+
+all_dates <- seq.Date(
+  from = as.Date("2013-01-01"),
+  to   = as.Date("2020-12-31"),
+  by   = "day"
+)
+
+inclusion_start <- sample(
+  all_dates,
+  size = N_patient,
+  replace = TRUE
+)
+
+inclusion_end <-
+  inclusion_start +
+  sample(
+    1:20,
+    N_patient,
+    replace = TRUE
+  )
+
+birth_date <-
+  inclusion_start -
+  round(
+    AGE * 365.25
+  )
+
+
+date_M1 <-
+  inclusion_start %m+%
+  months(1)
+
+date_M2 <-
+  inclusion_start %m+%
+  months(2)
+
+date_M3 <-
+  inclusion_start %m+%
+  months(3)
+
+date_M6 <-
+  inclusion_start %m+%
+  months(6)
+
+
+# ============================================================
+# ICU
+#
+# Synthetic approximation based on previous cohort proportion
+# ============================================================
+
+n_REA <- round(
+  N_patient *
+    1352 /
+    20825
+)
+
+REA <- make_binary(
+  N_patient,
+  n_REA
+)
+
+
+# ============================================================
+# ONE-YEAR MORTALITY
+#
+# Synthetic approximation based on previous mortality rates
+# ============================================================
+
+death_probability <- ifelse(
+  REA == 1,
+  0.4452,
+  0.3843
+)
+
+CJP_1an <- rbinom(
+  N_patient,
+  size = 1,
+  prob = death_probability
+)
+
+duree_CJP_1an <- ifelse(
+  CJP_1an == 1,
+  sample(
+    0:365,
+    N_patient,
+    replace = TRUE
+  ),
+  365
+)
+
+
+death_date <- as.Date(
+  rep(
+    NA,
+    N_patient
+  )
+)
+
+death_date[
+  CJP_1an == 1
+] <-
+  inclusion_start[
+    CJP_1an == 1
+  ] +
+  duree_CJP_1an[
+    CJP_1an == 1
+  ]
+
+
+last_seen_date <-
+  inclusion_start +
+  sample(
+    365:1400,
+    N_patient,
+    replace = TRUE
+  )
+
+
+# ============================================================
+# ICD-10: I20 / I21 / I22 / I25
+# ============================================================
+
+CIM_10_I20 <- rep(0L, N_patient)
+CIM_10_I21 <- rep(0L, N_patient)
+CIM_10_I22 <- rep(0L, N_patient)
+CIM_10_I25 <- rep(0L, N_patient)
+
+ihd_id <- which(
+  ischemic_heart_disease == 1
+)
+
+ihd_type <- sample(
+  c(
+    "I20",
+    "I21",
+    "I22",
+    "I25"
+  ),
+  size = length(ihd_id),
+  replace = TRUE,
+  prob = c(
+    0.18,
+    0.18,
+    0.04,
+    0.60
+  )
+)
+
+CIM_10_I20[
+  ihd_id[ihd_type == "I20"]
+] <- 1L
+
+CIM_10_I21[
+  ihd_id[ihd_type == "I21"]
+] <- 1L
+
+CIM_10_I22[
+  ihd_id[ihd_type == "I22"]
+] <- 1L
+
+CIM_10_I25[
+  ihd_id[ihd_type == "I25"]
+] <- 1L
+
+
+# ============================================================
+# I25 SUBCODES
+# ============================================================
+
+I25_codes <- split_parent_code(
+  
+  CIM_10_I25,
+  
+  c(
+    "CIM_10_I251",
+    "CIM_10_I252",
+    "CIM_10_I253",
+    "CIM_10_I254",
+    "CIM_10_I255",
+    "CIM_10_I256",
+    "CIM_10_I258",
+    "CIM_10_I259"
+  ),
+  
+  c(
+    0.32,
+    0.22,
+    0.03,
+    0.02,
+    0.08,
+    0.04,
+    0.10,
+    0.19
+  )
+)
+
+
+# ============================================================
+# I48 + SUBCODES
+# ============================================================
+
+CIM_10_I48 <-
+  atrial_fibrillation
+
+I48_codes <- split_parent_code(
+  
+  CIM_10_I48,
+  
+  c(
+    "CIM_10_I480",
+    "CIM_10_I481",
+    "CIM_10_I482",
+    "CIM_10_I483",
+    "CIM_10_I484",
+    "CIM_10_I489"
+  ),
+  
+  c(
+    0.10,
+    0.08,
+    0.06,
+    0.12,
+    0.20,
+    0.44
+  )
+)
+
+
+# ============================================================
+# I50 + SUBCODES
+# ============================================================
+
+CIM_10_I50 <-
+  chronic_heart_failure
+
+I50_codes <- split_parent_code(
+  
+  CIM_10_I50,
+  
+  c(
+    "CIM_10_I500",
+    "CIM_10_I501",
+    "CIM_10_I509"
+  ),
+  
+  c(
+    0.22,
+    0.38,
+    0.40
+  )
+)
+
+
+# ============================================================
+# DEVICE / CABG CODES
+#
+# Synthetic assumptions because real prevalence is unknown
+# ============================================================
+
+CIM_10_Z950 <- make_binary(
+  N_patient,
+  round(N_patient * 0.015)
+)
+
+CIM_10_Z450 <- make_binary(
+  N_patient,
+  round(N_patient * 0.008)
+)
+
+CIM_10_T821 <- make_binary(
+  N_patient,
+  round(N_patient * 0.003)
+)
+
+CIM_10_Z951 <- make_binary(
+  N_patient,
+  round(N_patient * 0.015)
+)
+
+
+# ============================================================
+# BETA-BLOCKER ATC CODES
+# ============================================================
+
+cum_cor_ATC_C07A <- rep(0L, N_patient)
+cum_cor_ATC_C07B <- rep(0L, N_patient)
+cum_cor_ATC_C07D <- rep(0L, N_patient)
+cum_cor_ATC_C07F <- rep(0L, N_patient)
+
+bb_id <- which(
+  beta_blocker == 1
+)
+
+bb_type <- sample(
+  c(
+    "C07A",
+    "C07B",
+    "C07D",
+    "C07F"
+  ),
+  size = length(bb_id),
+  replace = TRUE,
+  prob = c(
+    0.72,
+    0.08,
+    0.12,
+    0.08
+  )
+)
+
+cum_cor_ATC_C07A[
+  bb_id[bb_type == "C07A"]
+] <- 1L
+
+cum_cor_ATC_C07B[
+  bb_id[bb_type == "C07B"]
+] <- 1L
+
+cum_cor_ATC_C07D[
+  bb_id[bb_type == "C07D"]
+] <- 1L
+
+cum_cor_ATC_C07F[
+  bb_id[bb_type == "C07F"]
+] <- 1L
+
+
+# ============================================================
+# NEW C07C / C07E
+#
+# Synthetic assumptions
+# ============================================================
+
+cum_cor_ATC_C07C <- make_binary(
+  N_patient,
+  round(N_patient * 0.015)
+)
+
+cum_cor_ATC_C07E <- make_binary(
+  N_patient,
+  round(N_patient * 0.005)
+)
+
+
+# ============================================================
+# FUROSEMIDE
+#
+# Previous known count = 5882
+# ============================================================
+
+cum_cor_ATC_C03CA01 <- make_binary(
+  N_patient,
+  5882
+)
+
+
+# ============================================================
+# BUMETANIDE
+#
+# Synthetic assumption because real count is unknown
+# ============================================================
+
+cum_cor_ATC_C03CA02 <- make_binary(
+  N_patient,
+  round(N_patient * 0.005)
+)
+
+
+# ============================================================
+# ACE ATC
+# ============================================================
+
+cum_cor_ATC_C09A <- rep(0L, N_patient)
+cum_cor_ATC_C09B <- rep(0L, N_patient)
+
+ace_id <- which(
+  ACE == 1
+)
+
+ace_type <- sample(
+  c(
+    "C09A",
+    "C09B"
+  ),
+  size = length(ace_id),
+  replace = TRUE,
+  prob = c(
+    0.75,
+    0.25
+  )
+)
+
+cum_cor_ATC_C09A[
+  ace_id[ace_type == "C09A"]
+] <- 1L
+
+cum_cor_ATC_C09B[
+  ace_id[ace_type == "C09B"]
+] <- 1L
+
+
+# ============================================================
+# ARB ATC
+# ============================================================
+
+cum_cor_ATC_C09C <- rep(0L, N_patient)
+cum_cor_ATC_C09D <- rep(0L, N_patient)
+
+arb_id <- which(
+  ARB == 1
+)
+
+arb_type <- sample(
+  c(
+    "C09C",
+    "C09D"
+  ),
+  size = length(arb_id),
+  replace = TRUE,
+  prob = c(
+    0.78,
+    0.22
+  )
+)
+
+cum_cor_ATC_C09C[
+  arb_id[arb_type == "C09C"]
+] <- 1L
+
+cum_cor_ATC_C09D[
+  arb_id[arb_type == "C09D"]
+] <- 1L
+
+
+# ============================================================
+# OTHER COMORBIDITY VARIABLES
+#
+# No empirical prevalence supplied:
+# synthetic values only
+# ============================================================
+
+myocardial_infarction_cum <-
+  make_binary(N_patient, round(N_patient * 0.06))
+
+blood_loss_anemia_cum <-
+  make_binary(N_patient, round(N_patient * 0.03))
+
+cardiac_arrhythmias_cum <-
+  make_binary(N_patient, round(N_patient * 0.17))
+
+coagulopathy_cum <-
+  make_binary(N_patient, round(N_patient * 0.05))
+
+deficiency_anemia_cum <-
+  make_binary(N_patient, round(N_patient * 0.08))
+
+obesity_cum <-
+  make_binary(N_patient, round(N_patient * 0.10))
+
+pulmonary_circ_disorders_cum <-
+  make_binary(N_patient, round(N_patient * 0.05))
+
+fall_trauma_cum <-
+  make_binary(N_patient, round(N_patient * 0.12))
+
+genitourinary_cum <-
+  make_binary(N_patient, round(N_patient * 0.15))
+
+healthcare_associated_cum <-
+  make_binary(N_patient, round(N_patient * 0.05))
+
+infections_wounds_cum <-
+  make_binary(N_patient, round(N_patient * 0.10))
+
+social_other_cum <-
+  make_binary(N_patient, round(N_patient * 0.08))
+
+congestive_heart_failure_cum <-
+  chronic_heart_failure
+
+peripheral_vascular_disease_cum <-
+  make_binary(N_patient, round(N_patient * 0.08))
+
+paralysis_cum <-
+  make_binary(N_patient, round(N_patient * 0.03))
+
+diabetes_uncomp_cum <-
+  make_binary(N_patient, round(N_patient * 0.14))
+
+diabetes_comp_cum <-
+  make_binary(N_patient, round(N_patient * 0.06))
+
+kidney_disease_cum <-
+  make_binary(N_patient, round(N_patient * 0.16))
+
+liver_cum <-
+  make_binary(N_patient, round(N_patient * 0.05))
+
+peptic_ulcer_cum <-
+  make_binary(N_patient, round(N_patient * 0.03))
+
+hiv_cum <-
+  make_binary(N_patient, round(N_patient * 0.002))
+
+metastatic_cancer_cum <-
+  make_binary(N_patient, round(N_patient * 0.05))
+
+solid_tumor_cum <-
+  make_binary(N_patient, round(N_patient * 0.12))
+
+musculoskeletal_connective_tissue_cum <-
+  make_binary(N_patient, round(N_patient * 0.08))
+
+pulmonary_chronic_cum <-
+  make_binary(N_patient, round(N_patient * 0.20))
+
+dementia_cum <-
+  make_binary(N_patient, round(N_patient * 0.18))
+
+NutritionEndocrine_cum <-
+  make_binary(N_patient, round(N_patient * 0.12))
+
+Neurologic_disease_cum <-
+  make_binary(N_patient, round(N_patient * 0.14))
+
+alcohol_drug_abuse_cum <-
+  make_binary(N_patient, round(N_patient * 0.04))
+
+depression_psychose_cum <-
+  make_binary(N_patient, round(N_patient * 0.10))
+
+cerebral_vascular_accident_cum <-
+  make_binary(N_patient, round(N_patient * 0.12))
+
+
+# ============================================================
+# CREATE PATIENT-LEVEL DATASET
+# ============================================================
+
+df_patient_sim <- tibble(
+  
+  date_inclusion_id =
+    paste0(
+      "SYN-",
+      sprintf(
+        "%06d",
+        seq_len(N_patient)
+      )
+    ),
+  
+  patient_id = patient_id,
+  
+  inclusion_start = inclusion_start,
+  
+  inclusion_end = inclusion_end,
+  
+  REA = REA,
+  
+  date_M2 = date_M2,
+  
+  date_M1 = date_M1,
+  
+  date_M3 = date_M3,
+  
+  date_M6 = date_M6,
+  
+  AGE = AGE,
+  
+  inclusion_flag = TRUE,
+  
+  centre = "synthetic_centre",
+  
+  birth_date = birth_date,
+  
+  gender = gender,
+  
+  death_date = death_date,
+  
+  last_seen_date = last_seen_date,
+  
+  myocardial_infarction_cum =
+    myocardial_infarction_cum,
+  
+  blood_loss_anemia_cum =
+    blood_loss_anemia_cum,
+  
+  cardiac_arrhythmias_cum =
+    cardiac_arrhythmias_cum,
+  
+  coagulopathy_cum =
+    coagulopathy_cum,
+  
+  deficiency_anemia_cum =
+    deficiency_anemia_cum,
+  
+  obesity_cum =
+    obesity_cum,
+  
+  pulmonary_circ_disorders_cum =
+    pulmonary_circ_disorders_cum,
+  
+  fall_trauma_cum =
+    fall_trauma_cum,
+  
+  genitourinary_cum =
+    genitourinary_cum,
+  
+  healthcare_associated_cum =
+    healthcare_associated_cum,
+  
+  infections_wounds_cum =
+    infections_wounds_cum,
+  
+  social_other_cum =
+    social_other_cum,
+  
+  congestive_heart_failure_cum =
+    congestive_heart_failure_cum,
+  
+  peripheral_vascular_disease_cum =
+    peripheral_vascular_disease_cum,
+  
+  hypertension_cum =
+    hypertension_cum,
+  
+  paralysis_cum =
+    paralysis_cum,
+  
+  diabetes_uncomp_cum =
+    diabetes_uncomp_cum,
+  
+  diabetes_comp_cum =
+    diabetes_comp_cum,
+  
+  kidney_disease_cum =
+    kidney_disease_cum,
+  
+  liver_cum =
+    liver_cum,
+  
+  peptic_ulcer_cum =
+    peptic_ulcer_cum,
+  
+  hiv_cum =
+    hiv_cum,
+  
+  metastatic_cancer_cum =
+    metastatic_cancer_cum,
+  
+  solid_tumor_cum =
+    solid_tumor_cum,
+  
+  musculoskeletal_connective_tissue_cum =
+    musculoskeletal_connective_tissue_cum,
+  
+  pulmonary_chronic_cum =
+    pulmonary_chronic_cum,
+  
+  dementia_cum =
+    dementia_cum,
+  
+  NutritionEndocrine_cum =
+    NutritionEndocrine_cum,
+  
+  Neurologic_disease_cum =
+    Neurologic_disease_cum,
+  
+  alcohol_drug_abuse_cum =
+    alcohol_drug_abuse_cum,
+  
+  depression_psychose_cum =
+    depression_psychose_cum,
+  
+  cerebral_vascular_accident_cum =
+    cerebral_vascular_accident_cum,
+  
+  hosp_start_years =
+    year(inclusion_start),
+  
+  OLD =
+    ifelse(AGE >= 80, 1L, 0L),
+  
+  CCI_score =
+    CCI_score,
+  
+  ELIX_score =
+    ELIX_score,
+  
+  HFRS_score =
+    HFRS_score,
+  
+  Ins_Resp_Aigue_J96 =
+    Ins_Resp_Aigue_J96,
+  
+  ph_min =
+    ph_min,
+  
+  leucocytes_max =
+    leucocytes_max,
+  
+  CJP_1an =
+    CJP_1an,
+  
+  duree_CJP_1an =
+    duree_CJP_1an,
+  
+  ATCD_pulm_chronique =
+    pulmonary_chronic_cum,
+  
+  creatinine_first =
+    creatinine_first,
+  
+  hemoglobine_first =
+    hemoglobine_first,
+  
+  CIM_10_I20 =
+    CIM_10_I20,
+  
+  CIM_10_I21 =
+    CIM_10_I21,
+  
+  CIM_10_I22 =
+    CIM_10_I22,
+  
+  CIM_10_I25 =
+    CIM_10_I25,
+  
+  CIM_10_I48 =
+    CIM_10_I48,
+  
+  CIM_10_I50 =
+    CIM_10_I50,
+  
+  cum_cor_ATC_C07A =
+    cum_cor_ATC_C07A,
+  
+  cum_cor_ATC_C07B =
+    cum_cor_ATC_C07B,
+  
+  cum_cor_ATC_C07D =
+    cum_cor_ATC_C07D,
+  
+  cum_cor_ATC_C07F =
+    cum_cor_ATC_C07F,
+  
+  cum_cor_ATC_C09A =
+    cum_cor_ATC_C09A,
+  
+  cum_cor_ATC_C09B =
+    cum_cor_ATC_C09B,
+  
+  cum_cor_ATC_C09C =
+    cum_cor_ATC_C09C,
+  
+  cum_cor_ATC_C09D =
+    cum_cor_ATC_C09D,
+  
+  cum_cor_ATC_C03D =
+    Aldosterone,
+  
+  oxygene_first =
+    oxygene_first,
+  
+  ischemic_heart_disease =
+    ischemic_heart_disease,
+  
+  atrial_fibrillation =
+    atrial_fibrillation,
+  
+  chronic_heart_failure =
+    chronic_heart_failure,
+  
+  cv_history =
+    cv_history,
+  
+  severity =
+    severity,
+  
+  beta_blocker =
+    beta_blocker,
+  
+  ACE =
+    ACE,
+  
+  ARB =
+    ARB,
+  
+  Aldosterone =
+    Aldosterone,
+  
+  OMT =
+    OMT,
+  
+  CIM_10_Z950 =
+    CIM_10_Z950,
+  
+  CIM_10_Z450 =
+    CIM_10_Z450,
+  
+  CIM_10_T821 =
+    CIM_10_T821,
+  
+  CIM_10_Z951 =
+    CIM_10_Z951,
+  
+  cum_cor_ATC_C07C =
+    cum_cor_ATC_C07C,
+  
+  cum_cor_ATC_C07E =
+    cum_cor_ATC_C07E,
+  
+  cum_cor_ATC_C03CA01 =
+    cum_cor_ATC_C03CA01,
+  
+  cum_cor_ATC_C03CA02 =
+    cum_cor_ATC_C03CA02
+) |>
+  
+  bind_cols(
+    I25_codes,
+    I48_codes,
+    I50_codes
+  )
+
+
+# ============================================================
+# CREATE df_large WITH EXACTLY 26,091 ROWS
+# ============================================================
+
+n_extra <-
+  N_large -
+  N_patient
+
+extra_patient_id <- sample(
+  seq_len(N_patient),
+  size = n_extra,
+  replace = FALSE
+)
+
+df_extra <- df_patient_sim[
+  extra_patient_id,
+] |>
+  
+  mutate(
+    
+    inclusion_start =
+      inclusion_start +
+      sample(
+        1:729,
+        n_extra,
+        replace = TRUE
+      ),
+    
+    inclusion_end =
+      inclusion_start +
+      sample(
+        1:20,
+        n_extra,
+        replace = TRUE
+      ),
+    
+    date_M1 =
+      inclusion_start %m+%
+      months(1),
+    
+    date_M2 =
+      inclusion_start %m+%
+      months(2),
+    
+    date_M3 =
+      inclusion_start %m+%
+      months(3),
+    
+    date_M6 =
+      inclusion_start %m+%
+      months(6),
+    
+    hosp_start_years =
+      year(inclusion_start)
+  )
+
+
+df_large_sim <- bind_rows(
+  df_patient_sim,
+  df_extra
+) |>
+  
+  arrange(
+    patient_id,
+    inclusion_start
+  ) |>
+  
+  mutate(
+    
+    date_inclusion_id =
+      paste0(
+        "SYN-",
+        sprintf(
+          "%06d",
+          row_number()
+        )
+      )
+  )
+
+
+# ============================================================
+# RECREATE PATIENT-LEVEL DATASET
+# USING EXACTLY THE SAME LOGIC AS YOUR REAL DATA
+# ============================================================
+
+df_patient_sim <- df_large_sim |>
+  
+  filter(
+    inclusion_flag == TRUE
+  ) |>
+  
+  group_by(
+    patient_id
+  ) |>
+  
+  slice_min(
+    order_by = inclusion_start,
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  
+  ungroup()
+
+
+# ============================================================
+# VALIDATION
+# ============================================================
+
+cat(
+  "\n--------------------------------------\n"
+)
+
+cat(
+  "df_large_sim rows:",
+  nrow(df_large_sim),
+  "\n"
+)
+
+cat(
+  "df_patient_sim rows:",
+  nrow(df_patient_sim),
+  "\n"
+)
+
+cat(
+  "Unique patients:",
+  n_distinct(df_large_sim$patient_id),
+  "\n"
+)
+
+
+cat(
+  "\nOMT:\n"
+)
+
+print(
+  table(
+    df_patient_sim$OMT
+  )
+)
+
+
+cat(
+  "\nCardiovascular variables:\n"
+)
+
+print(
+  df_patient_sim |>
+    summarise(
+      
+      ischemic_heart_disease =
+        sum(
+          ischemic_heart_disease
+        ),
+      
+      atrial_fibrillation =
+        sum(
+          atrial_fibrillation
+        ),
+      
+      chronic_heart_failure =
+        sum(
+          chronic_heart_failure
+        ),
+      
+      cv_history =
+        sum(
+          cv_history
+        )
+    )
+)
+
+
+cat(
+  "\nTreatment variables:\n"
+)
+
+print(
+  df_patient_sim |>
+    summarise(
+      
+      beta_blocker =
+        sum(beta_blocker),
+      
+      ACE =
+        sum(ACE),
+      
+      ARB =
+        sum(ARB),
+      
+      Aldosterone =
+        sum(Aldosterone)
+    )
+)
+
+
+cat(
+  "\nMissing percentages:\n"
+)
+
+print(
+  df_patient_sim |>
+    summarise(
+      
+      oxygene_first =
+        round(
+          mean(
+            is.na(oxygene_first)
+          ) * 100,
+          1
+        ),
+      
+      hemoglobine_first =
+        round(
+          mean(
+            is.na(hemoglobine_first)
+          ) * 100,
+          1
+        ),
+      
+      creatinine_first =
+        round(
+          mean(
+            is.na(creatinine_first)
+          ) * 100,
+          1
+        ),
+      
+      leucocytes_max =
+        round(
+          mean(
+            is.na(leucocytes_max)
+          ) * 100,
+          1
+        ),
+      
+      ph_min =
+        round(
+          mean(
+            is.na(ph_min)
+          ) * 100,
+          1
+        )
+    )
+)
+
+
+cat(
+  "\nSimulation completed.\n"
+)
+
+cat(
+  "Use df_large_sim for hospitalization-level analyses.\n"
+)
+
+cat(
+  "Use df_patient_sim for patient-level analyses.\n"
+)
+
+library(arrow)
+
+write_parquet(
+  df_large_sim,
+  "df_large_sim.parquet"
+)

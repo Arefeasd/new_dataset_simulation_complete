@@ -1,0 +1,341 @@
+---
+title: "first_adjusted_cox"
+output: html_document
+date: "2026-08-14"
+---
+
+
+```{r setup, message=FALSE, warning=FALSE}
+library(arrow)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(tableone)
+library(ggsurvfit)
+library(survival)
+```
+
+```{r}
+df_large <- read_parquet(
+"C:\\Users\\CICP\\Desktop\\My_Computer\\Professional\\Github\\new_dataset\\simulation_complete\\df_large_sim.parquet"
+)
+```
+
+
+
+**Conversion from hospitalization level to patient level**
+
+The original dataset is structured at the hospitalization level, meaning that each patient may have several hospitalization records. To create a patient-level dataset, we first retain only hospitalization stays that meet the inclusion criteria (inclusion_flag = TRUE). Then, for each patient, we select the earliest inclusion hospitalization according to inclusion_start. When several hospitalization records have the same earliest inclusion date, only one record is retained.
+
+```{r}
+# Convert the dataset from the hospitalization level to the patient level:
+# keep only inclusion stays, then retain the earliest inclusion stay
+# for each patient according to inclusion_start.
+# If several stays have the same earliest date, keep only one of them.
+df_patient <- df_large |>
+  filter(inclusion_flag == TRUE) |>
+  group_by(patient_id) |>
+  slice_min(
+    order_by = inclusion_start,
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  ungroup()
+```
+
+```{r}
+cohort_summary <- tibble(
+  indicator = c(
+    "Hospitalization-level rows",
+    "Patient-level rows",
+    "Unique patients",
+    "Duplicated patient IDs"
+  ),
+  value = c(
+    nrow(df_large),
+    nrow(df_patient),
+    n_distinct(df_patient$patient_id),
+    sum(duplicated(df_patient$patient_id))
+  )
+)
+
+cohort_summary
+```
+
+
+
+**Cardiovascular history variables**
+
+Patient-level indicators were created for each cardiovascular condition using CIM-10 variables. These indicators were then combined into a composite cv_history variable representing the presence of at least one cardiovascular disease. Missing values were retained when the cardiovascular history could not be determined from the available data.
+
+```{r}
+# Create patient-level cardiovascular disease indicators from CIM-10 variables,
+# then combine them into a composite cardiovascular history variable.
+#
+# For each disease indicator:
+#   1 = the corresponding cardiovascular disease is present,
+#   0 = the corresponding cardiovascular disease is absent,
+#   NA = the disease status cannot be determined from the available data.
+#
+# The composite cv_history variable is coded as:
+#   1 if at least one cardiovascular condition is present,
+#   0 if all cardiovascular conditions are absent,
+#   NA if no condition is present but at least one component is missing.
+
+df_patient <- df_patient |>
+  mutate(
+    ischemic_heart_disease = case_when(
+        CIM_10_I20 == 1 |
+        CIM_10_I21 == 1 |
+        CIM_10_I22 == 1 |
+        CIM_10_I25 == 1 ~ 1,
+        TRUE ~ 0,
+    )
+  )
+
+
+df_patient <- df_patient |>
+  mutate(
+    atrial_fibrillation = case_when(
+        CIM_10_I48 == 1 ~ 1,
+        TRUE ~ 0,
+    )
+  )
+
+
+
+df_patient <- df_patient |>
+  mutate(
+    chronic_heart_failure = case_when(
+        CIM_10_I50 == 1 ~ 1,
+        TRUE ~ 0,
+    )
+  )
+
+
+df_patient <- df_patient |>
+  mutate(
+    cv_history = case_when(
+      ischemic_heart_disease == 1 |
+      atrial_fibrillation == 1 |
+      chronic_heart_failure == 1 |
+      cerebral_vascular_accident_cum == 1 ~ 1,
+      TRUE ~ 0
+      
+    )
+  )
+```
+
+**Composite severity indicator** 
+
+A composite severity variable was created using acute respiratory failure status and the minimum recorded pH value. Severity was classified as present when acute respiratory failure was identified or pH was below 7.38. Cases that could not be classified from the available information were retained as missing.
+
+```{r}
+# Create a composite severity indicator based on acute respiratory failure
+# and the minimum recorded pH value:
+#   1 = acute respiratory failure is present or pH is below 7.38,
+#   0 = acute respiratory failure is absent or pH is at least 7.38,
+#   NA = severity cannot be determined from the available data.
+
+df_patient <- df_patient |>
+  mutate(severity = case_when(
+    Ins_Resp_Aigue_J96 == 1 | ph_min < 7.38 ~ 1,
+    Ins_Resp_Aigue_J96 == 0 | ph_min >= 7.38 ~ 0,
+    TRUE ~ NA_real_
+  )
+)
+```
+
+
+**Patient-level medication indicators**
+
+Patient-level medication indicators were created for beta-blockers, ACE inhibitors, ARBs, and aldosterone antagonists/potassium-sparing agents using the corresponding ATC groups. Missing values were retained when medication use could not be determined from the available data.
+
+```{r}
+# Create patient-level medication indicators from the corresponding ATC groups
+# for beta-blockers, ACE inhibitors, ARBs,
+# and aldosterone antagonists/potassium-sparing agents.
+#
+# For each medication class:
+#   1 = at least one related ATC group is present,
+#   0 = all related ATC groups are absent,
+#   NA = medication use cannot be determined from the available data.
+
+# C07A BETA BLOCKING AGENTS
+# C07B BETA BLOCKING AGENTS AND THIAZIDES
+# C07C BETA BLOCKING AGENTS AND OTHER DIURETICS
+# C07D BETA BLOCKING AGENTS, THIAZIDES AND OTHER DIURETICS
+# C07E BETA BLOCKING AGENTS AND VASODILATORS
+# C07F BETA BLOCKING AGENTS, OTHER COMBINATIONS
+
+df_patient <- df_patient |>
+  mutate(
+    beta_blocker = case_when(
+        cum_cor_ATC_C07A == 1 |
+        cum_cor_ATC_C07B == 1 |
+        cum_cor_ATC_C07D == 1 |
+        cum_cor_ATC_C07F == 1 ~ 1,
+        
+        TRUE ~ 0
+    )
+  )
+
+# C09A ACE INHIBITORS, PLAIN
+# C09B ACE INHIBITORS, COMBINATIONS
+
+df_patient <- df_patient |>
+  mutate( ACE = 
+    case_when(
+      cum_cor_ATC_C09A == 1 |
+      cum_cor_ATC_C09B == 1 ~ 1,
+      
+      TRUE ~ 0
+    )
+  )
+
+# C09C ANGIOTENSIN II RECEPTOR BLOCKERS (ARBs), PLAIN
+# C09D ANGIOTENSIN II RECEPTOR BLOCKERS (ARBs), COMBINATIONS
+
+df_patient <- df_patient |>
+  mutate( ARB = 
+            case_when(
+              cum_cor_ATC_C09C == 1 |
+              cum_cor_ATC_C09D == 1 ~ 1,
+              
+              TRUE ~ 0
+        )
+  )
+
+
+# C03D ALDOSTERONE ANTAGONISTS AND OTHER POTASSIUM-SPARING AGENTS
+df_patient <- df_patient |>
+  mutate( Aldosterone = 
+            case_when(
+                cum_cor_ATC_C03D == 1 ~ 1,
+              TRUE ~ 0
+            )
+  )
+```
+
+**Optimal Medical Therapy score**
+
+An Optimal Medical Therapy (OMT) score was calculated from three therapeutic components: beta-blockers, ACE inhibitors or ARBs, and aldosterone antagonists. ACE inhibitors and ARBs were considered a single component; therefore, receiving either or both contributed a maximum of one point. The total score ranges from 0 to 3, with higher values indicating the use of more OMT components.
+
+```{r}
+# Create the Optimal Medical Therapy (OMT) score by summing:
+#   1 point for beta-blocker use,
+#   1 point for either ACE inhibitor or ARB use,
+#   1 point for aldosterone antagonist use.
+#
+# ACE inhibitors and ARBs are treated as one therapeutic component,
+# so using both does not add more than one point.
+# The resulting OMT score ranges from 0 to 3.
+df_patient <- df_patient |>
+  mutate(OMT = beta_blocker + pmax(ACE, ARB) + Aldosterone)
+```
+
+
+```{r}
+myVars <- c(
+  "AGE",
+  "gender",
+  "oxygene_first",
+  "hemoglobine_first",
+  "creatinine_first",
+  "leucocytes_max",
+  "ph_min",
+  "HFRS_score",
+  "ELIX_score",
+  "CCI_score",
+  "ischemic_heart_disease",
+  "atrial_fibrillation",
+  "chronic_heart_failure",
+  "hypertension_cum",
+  "cv_history",
+  "Ins_Resp_Aigue_J96",
+  "severity",
+  "beta_blocker",
+  "ACE",
+  "ARB",
+  "Aldosterone", 
+  "OMT"
+)
+```
+
+```{r}
+missing_summary <- df_patient |>
+  summarise(
+    across(
+      all_of(myVars),
+      list(
+        missing_n = ~ sum(is.na(.)),
+        missing_percent = ~ round(mean(is.na(.)) * 100, 2)
+      )
+    )
+  ) |>
+  tidyr::pivot_longer(
+    cols = everything(),
+    names_to = c("variable", ".value"),
+    names_pattern = "^(.*)_(missing_n|missing_percent)$"
+  ) |>
+  mutate(
+    total_n = nrow(df_patient),
+    available_n = total_n - missing_n
+  ) |>
+  select(
+    variable,
+    total_n,
+    available_n,
+    missing_n,
+    missing_percent
+  ) |>
+  arrange(desc(missing_percent))
+
+print(missing_summary, n = Inf)
+```
+
+```{r}
+df_patient <- df_patient |>
+  mutate(diabetes = 
+           case_when(
+             diabetes_uncomp_cum == 1 |
+             diabetes_comp_cum == 1 ~ 1,
+             TRUE ~ 0
+           )
+         )
+```
+
+
+```{r}
+covariates <-c(
+  "AGE",
+  "gender",
+  "REA",
+  "CCI_score",
+  "severity",
+  "diabetes",
+  "kidney_disease_cum",
+  "liver_cum",
+  "metastatic_cancer_cum",
+  "ATCD_pulm_chronique",
+  "dementia_cum",
+  "Neurologic_disease_cum"
+)
+```
+
+```{r}
+univ_formulas <- sapply(covariates,
+                        function(x) as.formula(paste("Surv(duree_CJP_1an, CJP_1an) ~", x)))
+univ_models <- lapply(univ_formulas, function(f) coxph(f, data = df_patient))
+
+univ_results <- lapply(univ_models, function(m) {
+  s <- summary(m)
+  HR    <- signif(s$coef[2], 2)               # exp(coef) = hazard ratio
+  lower <- signif(s$conf.int[, "lower .95"], 2)
+  upper <- signif(s$conf.int[, "upper .95"], 2)
+  p     <- signif(s$wald["pvalue"], 2)
+  c(HR = paste0(HR, " (", lower, "-", upper, ")"), p.value = p)
+})
+as.data.frame(t(as.data.frame(univ_results, check.names = FALSE)))
+```
+
