@@ -678,9 +678,10 @@ print(missing_summary, n = Inf)</code></pre>
 )</code></pre>
 <pre class="r"><code>univ_formulas &lt;- sapply(covariates,
                         function(x) as.formula(paste(&quot;Surv(duree_CJP_1an, CJP_1an) ~&quot;, x)))
-univ_models &lt;- lapply(univ_formulas, function(f) coxph(f, data = df_patient))
-
-univ_results &lt;- lapply(univ_models, function(m) {
+univ_models &lt;- lapply(univ_formulas, function(f) coxph(f, data = df_patient))</code></pre>
+<pre><code>## Warning in coxph.fit(X, Y, istrat, offset, init, control, weights = weights, :
+## Loglik converged before variable 1 ; coefficient may be infinite.</code></pre>
+<pre class="r"><code>univ_results &lt;- lapply(univ_models, function(m) {
   s &lt;- summary(m)
   HR    &lt;- signif(s$coef[2], 2)               # exp(coef) = hazard ratio
   lower &lt;- signif(s$conf.int[, &quot;lower .95&quot;], 2)
@@ -690,18 +691,18 @@ univ_results &lt;- lapply(univ_models, function(m) {
 })
 as.data.frame(t(as.data.frame(univ_results, check.names = FALSE)))</code></pre>
 <pre><code>##                                     HR p.value.pvalue
-## AGE                            1 (1-1)            0.5
-## gender                    1 (0.98-1.1)           0.23
-## REA                        1.1 (1-1.2)          0.021
-## CCI_score                0.99 (0.97-1)           0.36
-## severity                 0.99 (0.94-1)           0.53
-## diabetes                 0.96 (0.91-1)            0.2
-## kidney_disease_cum     0.99 (0.93-1.1)           0.71
-## liver_cum                  1.1 (1-1.2)          0.035
-## metastatic_cancer_cum     1 (0.93-1.1)           0.58
-## ATCD_pulm_chronique       0.95 (0.9-1)          0.058
-## dementia_cum             0.97 (0.92-1)           0.35
-## Neurologic_disease_cum   0.97 (0.91-1)           0.32</code></pre>
+## AGE                            1 (1-1)           0.02
+## gender                    1 (0.97-1.1)           0.69
+## REA                      1.3 (1.2-1.4)        8.6e-09
+## CCI_score                   1 (0.97-1)            0.7
+## severity                 0.99 (0.95-1)           0.78
+## diabetes                  1 (0.95-1.1)           0.99
+## kidney_disease_cum       0.96 (0.91-1)           0.21
+## liver_cum                 1 (0.92-1.1)            0.8
+## metastatic_cancer_cum  0.95 (0.86-1.1)           0.32
+## ATCD_pulm_chronique      0.99 (0.93-1)           0.65
+## dementia_cum              1 (0.95-1.1)           0.98
+## Neurologic_disease_cum    1 (0.93-1.1)           0.89</code></pre>
 
 
 
