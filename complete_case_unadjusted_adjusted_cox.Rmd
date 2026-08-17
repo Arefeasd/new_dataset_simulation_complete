@@ -481,14 +481,43 @@ cox_1 <- coxph(
   data = df_cc
 )
 
+summary(cox_1)
+
 cox_2 <- coxph(
   Surv(duree_CJP_1an, CJP_1an) ~ cv_history + AGE,
   data = df_cc
 )
 
+summary(cox_2)
+
 cox_3 <- coxph(
   Surv(duree_CJP_1an, CJP_1an) ~ cv_history + AGE + gender,
   data = df_cc
 )
+
+summary(cox_3)
+
+cox_4 <- coxph(
+  Surv(duree_CJP_1an, CJP_1an) ~ cv_history + AGE + gender + REA,
+  data = df_cc
+)
+
+summary(cox_4)
+
+cox_5 <- coxph(
+  Surv(duree_CJP_1an, CJP_1an) ~ cv_history + AGE + gender + REA
+  + oxygene_first,
+  data = df_cc
+)
+
+summary(cox_5)
+
+cox_6 <- coxph(
+  Surv(duree_CJP_1an, CJP_1an) ~ cv_history + AGE + gender + REA
+  + oxygene_first + CCI_score,
+  data = df_cc
+)
+
+summary(cox_6)
 ```
 
