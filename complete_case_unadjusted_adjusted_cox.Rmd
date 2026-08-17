@@ -351,3 +351,144 @@ ggforest(cox_adjusted,
          data = model.frame(cox_adjusted))
 ```
 
+```{r}
+library(ggplot2)
+
+# Extract results from the adjusted Cox model
+cox_summary <- summary(cox_adjusted)
+
+forest_data <- data.frame(
+  variable = rownames(cox_summary$conf.int),
+  HR = cox_summary$conf.int[, "exp(coef)"],
+  lower = cox_summary$conf.int[, "lower .95"],
+  upper = cox_summary$conf.int[, "upper .95"],
+  p_value = cox_summary$coefficients[, "Pr(>|z|)"]
+)
+
+# Create formatted labels
+forest_data$HR_CI <- sprintf(
+  "%.2f (%.2f–%.2f)",
+  forest_data$HR,
+  forest_data$lower,
+  forest_data$upper
+)
+
+forest_data$p_label <- ifelse(
+  forest_data$p_value < 0.001,
+  "<0.001",
+  sprintf("%.3f", forest_data$p_value)
+)
+
+# Keep the same order as in the Cox model
+forest_data$variable <- factor(
+  forest_data$variable,
+  levels = rev(forest_data$variable)
+)
+
+# Position of the text column
+text_position <- max(forest_data$upper, na.rm = TRUE) * 1.5
+
+# Forest plot
+ggplot(forest_data, aes(x = HR, y = variable)) +
+  
+  # Reference line: HR = 1
+  geom_vline(
+    xintercept = 1,
+    linetype = "dashed",
+    linewidth = 0.6
+  ) +
+  
+  # 95% confidence intervals
+  geom_errorbarh(
+    aes(xmin = lower, xmax = upper),
+    height = 0.15,
+    linewidth = 0.7
+  ) +
+  
+  # Hazard ratios
+  geom_point(
+    size = 3
+  ) +
+  
+  # HR, 95% CI and p-value
+  geom_text(
+    aes(
+      x = text_position,
+      label = paste0(
+        HR_CI,
+        "   p = ",
+        p_label
+      )
+    ),
+    hjust = 0,
+    size = 3.5
+  ) +
+  
+  # Logarithmic HR scale
+  scale_x_log10() +
+  
+  labs(
+    title = "Adjusted Cox proportional hazards model",
+    x = "Hazard Ratio (95% CI)",
+    y = NULL
+  ) +
+  
+  coord_cartesian(clip = "off") +
+  
+  theme_minimal(base_size = 13) +
+  
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    plot.title = element_text(face = "bold"),
+    plot.margin = margin(
+      t = 10,
+      r = 180,
+      b = 10,
+      l = 10
+    )
+  )
+```
+
+
+```{r}
+vars_cc <- c(
+  "duree_CJP_1an",
+  "CJP_1an",
+  "cv_history",
+  "AGE",
+  "gender",
+  "REA",
+  "CCI_score",
+  "severity",
+  "oxygene_first",
+  "diabetes",
+  "kidney_disease_cum",
+  "liver_cum",
+  "metastatic_cancer_cum",
+  "ATCD_pulm_chronique",
+  "dementia_cum",
+  "Neurologic_disease_cum"
+)
+
+df_cc <- df_patient |>
+  filter(if_all(all_of(vars_cc), ~ !is.na(.)))
+```
+
+```{r}
+cox_1 <- coxph(
+  Surv(duree_CJP_1an, CJP_1an) ~ cv_history,
+  data = df_cc
+)
+
+cox_2 <- coxph(
+  Surv(duree_CJP_1an, CJP_1an) ~ cv_history + AGE,
+  data = df_cc
+)
+
+cox_3 <- coxph(
+  Surv(duree_CJP_1an, CJP_1an) ~ cv_history + AGE + gender,
+  data = df_cc
+)
+```
+
