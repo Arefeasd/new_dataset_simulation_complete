@@ -306,159 +306,103 @@ summary(cox_adjusted)
 
 ```{r, echo=FALSE}
 # Extract results from the adjusted Cox model
-cox_sum_adjusted <- summary(cox_adjusted)
+cox_summary <- summary(cox_adjusted)
 
-forest_adjusted <- data.frame(
-  Variable = rownames(cox_sum_adjusted$coefficients),
-  HR = cox_sum_adjusted$conf.int[, "exp(coef)"],
-  lower_CI = cox_sum_adjusted$conf.int[, "lower .95"],
-  upper_CI = cox_sum_adjusted$conf.int[, "upper .95"],
-  p_value = cox_sum_adjusted$coefficients[, "Pr(>|z|)"]
+forest_data <- data.frame(
+  variable = rownames(cox_summary$conf.int),
+  HR = cox_summary$conf.int[, "exp(coef)"],
+  lower = cox_summary$conf.int[, "lower .95"],
+  upper = cox_summary$conf.int[, "upper .95"],
+  p_value = cox_summary$coefficients[, "Pr(>|z|)"]
 )
 
-# Format the numbers
-forest_adjusted$HR_txt <- sprintf("%.2f", forest_adjusted$HR)
-
-forest_adjusted$CI_txt <- sprintf(
-  "(%.2f–%.2f)",
-  forest_adjusted$lower_CI,
-  forest_adjusted$upper_CI
+# Create formatted labels
+forest_data$HR_CI <- sprintf(
+  "%.2f (%.2f–%.2f)",
+  forest_data$HR,
+  forest_data$lower,
+  forest_data$upper
 )
 
-forest_adjusted$p_txt <- ifelse(
-  forest_adjusted$p_value < 0.001,
+forest_data$p_label <- ifelse(
+  forest_data$p_value < 0.001,
   "<0.001",
-  sprintf("%.3f", forest_adjusted$p_value)
+  sprintf("%.3f", forest_data$p_value)
 )
 
-# Sort variables from largest HR to smallest HR
-forest_adjusted <- forest_adjusted[
-  order(forest_adjusted$HR, decreasing = TRUE),
+# Sort from largest HR to smallest HR
+forest_data <- forest_data[
+  order(forest_data$HR, decreasing = TRUE),
 ]
 
-# Preserve order in the plot
-forest_adjusted$Variable <- factor(
-  forest_adjusted$Variable,
-  levels = rev(forest_adjusted$Variable)
+# Preserve this order in the plot
+forest_data$variable <- factor(
+  forest_data$variable,
+  levels = rev(forest_data$variable)
 )
 
-# Number of rows
-n_rows <- nrow(forest_adjusted)
+# Position of the text column
+text_position <- max(forest_data$upper, na.rm = TRUE) * 1.5
 
 # Forest plot
-ggplot(
-  forest_adjusted,
-  aes(
-    x = HR,
-    y = Variable
-  )
-) +
+ggplot(forest_data, aes(x = HR, y = variable)) +
 
-  geom_point(
-    size = 2.5
-  ) +
-
-  geom_errorbarh(
-    aes(
-      xmin = lower_CI,
-      xmax = upper_CI
-    ),
-    height = 0.20
-  ) +
-
-  # Reference line HR = 1
+  # Reference line: HR = 1
   geom_vline(
     xintercept = 1,
-    linetype = "dashed"
+    linetype = "dashed",
+    linewidth = 0.6
   ) +
 
-  # HR column
+  # 95% confidence intervals
+  geom_errorbarh(
+    aes(xmin = lower, xmax = upper),
+    height = 0.15,
+    linewidth = 0.7
+  ) +
+
+  # Hazard ratios
+  geom_point(
+    size = 3
+  ) +
+
+  # HR, 95% CI and p-value
   geom_text(
     aes(
-      x = 1.65,
-      label = HR_txt
+      x = text_position,
+      label = paste0(
+        HR_CI,
+        "   p = ",
+        p_label
+      )
     ),
     hjust = 0,
-    size = 4
+    size = 3.5
   ) +
 
-  # 95% CI column
-  geom_text(
-    aes(
-      x = 2.60,
-      label = CI_txt
-    ),
-    hjust = 0,
-    size = 4
-  ) +
-
-  # p-value column
-  geom_text(
-    aes(
-      x = 6.50,
-      label = p_txt
-    ),
-    hjust = 0,
-    size = 4
-  ) +
-
-  # Column headers
-  annotate(
-    "text",
-    x = 1.65,
-    y = n_rows + 0.8,
-    label = "HR",
-    hjust = 0,
-    fontface = "bold",
-    size = 4.5
-  ) +
-
-  annotate(
-    "text",
-    x = 2.60,
-    y = n_rows + 0.8,
-    label = "95% CI",
-    hjust = 0,
-    fontface = "bold",
-    size = 4.5
-  ) +
-
-  annotate(
-    "text",
-    x = 6.50,
-    y = n_rows + 0.8,
-    label = "p-value",
-    hjust = 0,
-    fontface = "bold",
-    size = 4.5
-  ) +
-
-  scale_x_log10(
-    limits = c(0.45, 10),
-    breaks = c(0.5, 1, 2)
-  ) +
+  # Logarithmic HR scale
+  scale_x_log10() +
 
   labs(
     title = "Adjusted Cox proportional hazards model",
-    x = "Hazard Ratio",
+    x = "Hazard Ratio (95% CI)",
     y = NULL
   ) +
 
-  theme_minimal(
-    base_size = 12
-  ) +
+  coord_cartesian(clip = "off") +
+
+  theme_minimal(base_size = 13) +
 
   theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    plot.title = element_text(face = "bold"),
     plot.margin = margin(
       t = 10,
-      r = 30,
+      r = 180,
       b = 10,
       l = 10
     )
-  ) +
-
-  coord_cartesian(
-    clip = "off"
   )
 ```
 
@@ -483,162 +427,118 @@ cox_subgroup_cv0 <- coxph(
 ```
 
 ```{r, echo=FALSE}
-library(ggplot2)
+# Extract results from the Cox model: cv_history = 0
+cox_summary_cv0 <- summary(cox_subgroup_cv0)
 
-# Extract results from the Cox model
-cox_sum_cv0 <- summary(cox_subgroup_cv0)
-
-forest_cv0 <- data.frame(
-  Variable = rownames(cox_sum_cv0$coefficients),
-  HR = cox_sum_cv0$conf.int[, "exp(coef)"],
-  lower_CI = cox_sum_cv0$conf.int[, "lower .95"],
-  upper_CI = cox_sum_cv0$conf.int[, "upper .95"],
-  p_value = cox_sum_cv0$coefficients[, "Pr(>|z|)"]
+forest_data_cv0 <- data.frame(
+  variable = rownames(cox_summary_cv0$conf.int),
+  HR = cox_summary_cv0$conf.int[, "exp(coef)"],
+  lower = cox_summary_cv0$conf.int[, "lower .95"],
+  upper = cox_summary_cv0$conf.int[, "upper .95"],
+  p_value = cox_summary_cv0$coefficients[, "Pr(>|z|)"]
 )
 
-# Format the numbers
-forest_cv0$HR_txt <- sprintf("%.2f", forest_cv0$HR)
-
-forest_cv0$CI_txt <- sprintf(
-  "(%.2f–%.2f)",
-  forest_cv0$lower_CI,
-  forest_cv0$upper_CI
+# Create formatted labels
+forest_data_cv0$HR_CI <- sprintf(
+  "%.2f (%.2f–%.2f)",
+  forest_data_cv0$HR,
+  forest_data_cv0$lower,
+  forest_data_cv0$upper
 )
 
-forest_cv0$p_txt <- ifelse(
-  forest_cv0$p_value < 0.001,
+forest_data_cv0$p_label <- ifelse(
+  forest_data_cv0$p_value < 0.001,
   "<0.001",
-  sprintf("%.3f", forest_cv0$p_value)
+  sprintf("%.3f", forest_data_cv0$p_value)
 )
 
-# Sort variables from largest HR to smallest HR
-forest_cv0 <- forest_cv0[
-  order(forest_cv0$HR, decreasing = TRUE),
+# Sort from largest HR to smallest HR
+forest_data_cv0 <- forest_data_cv0[
+  order(forest_data_cv0$HR, decreasing = TRUE),
 ]
 
 # Preserve this order in the plot
-forest_cv0$Variable <- factor(
-  forest_cv0$Variable,
-  levels = rev(forest_cv0$Variable)
+forest_data_cv0$variable <- factor(
+  forest_data_cv0$variable,
+  levels = rev(forest_data_cv0$variable)
 )
 
-# Number of rows
-n_rows <- nrow(forest_cv0)
+# Position of the text column
+text_position <- max(
+  forest_data_cv0$upper,
+  na.rm = TRUE
+) * 1.5
 
 # Forest plot
 ggplot(
-  forest_cv0,
-  aes(
-    x = HR,
-    y = Variable
-  )
+  forest_data_cv0,
+  aes(x = HR, y = variable)
 ) +
 
-  geom_point(
-    size = 2.5
-  ) +
-
-  geom_errorbarh(
-    aes(
-      xmin = lower_CI,
-      xmax = upper_CI
-    ),
-    height = 0.20
-  ) +
-
+  # Reference line: HR = 1
   geom_vline(
     xintercept = 1,
-    linetype = "dashed"
+    linetype = "dashed",
+    linewidth = 0.6
   ) +
 
-  # HR column
+  # 95% confidence intervals
+  geom_errorbarh(
+    aes(
+      xmin = lower,
+      xmax = upper
+    ),
+    height = 0.15,
+    linewidth = 0.7
+  ) +
+
+  # Hazard ratios
+  geom_point(
+    size = 3
+  ) +
+
+  # HR, 95% CI and p-value
   geom_text(
     aes(
-      x = 1.65,
-      label = HR_txt
+      x = text_position,
+      label = paste0(
+        HR_CI,
+        "   p = ",
+        p_label
+      )
     ),
     hjust = 0,
-    size = 4
+    size = 3.5
   ) +
 
-  # 95% CI column
-  geom_text(
-    aes(
-      x = 2.60,
-      label = CI_txt
-    ),
-    hjust = 0,
-    size = 4
-  ) +
-
-  # p-value column
-  geom_text(
-    aes(
-      x = 6.50,
-      label = p_txt
-    ),
-    hjust = 0,
-    size = 4
-  ) +
-
-  # Column headers
-  annotate(
-    "text",
-    x = 1.65,
-    y = n_rows + 0.8,
-    label = "HR",
-    hjust = 0,
-    fontface = "bold",
-    size = 4.5
-  ) +
-
-  annotate(
-    "text",
-    x = 2.60,
-    y = n_rows + 0.8,
-    label = "95% CI",
-    hjust = 0,
-    fontface = "bold",
-    size = 4.5
-  ) +
-
-  annotate(
-    "text",
-    x = 6.50,
-    y = n_rows + 0.8,
-    label = "p-value",
-    hjust = 0,
-    fontface = "bold",
-    size = 4.5
-  ) +
-
-  scale_x_log10(
-    limits = c(0.45, 10),
-    breaks = c(0.5, 1, 2)
-  ) +
+  # Logarithmic HR scale
+  scale_x_log10() +
 
   labs(
     title = "Adjusted Cox model – No cardiovascular history",
     subtitle = "Subgroup: cv_history = 0",
-    x = "Hazard Ratio",
+    x = "Hazard Ratio (95% CI)",
     y = NULL
-  ) +
-
-  theme_minimal(
-    base_size = 12
-  ) +
-
-  theme(
-    plot.margin = margin(
-      t = 10,
-      r = 30,
-      b = 10,
-      l = 10
-    )
   ) +
 
   coord_cartesian(
     clip = "off"
+  ) +
+
+  theme_minimal(
+    base_size = 13
+  ) +
+
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    plot.title = element_text(face = "bold"),
+    plot.margin = margin(
+      t = 10,
+      r = 180,
+      b = 10,
+      l = 10
+    )
   )
 ```
 
@@ -663,166 +563,118 @@ cox_subgroup_cv1 <- coxph(
 ```
 
 ```{r, echo=FALSE}
-library(ggplot2)
+# Extract results from the Cox model: cv_history = 1
+cox_summary_cv1 <- summary(cox_subgroup_cv1)
 
-# Extract results from the Cox model
-cox_sum_cv1 <- summary(cox_subgroup_cv1)
-
-forest_cv1 <- data.frame(
-  Variable = rownames(cox_sum_cv1$coefficients),
-  HR = cox_sum_cv1$conf.int[, "exp(coef)"],
-  lower_CI = cox_sum_cv1$conf.int[, "lower .95"],
-  upper_CI = cox_sum_cv1$conf.int[, "upper .95"],
-  p_value = cox_sum_cv1$coefficients[, "Pr(>|z|)"]
+forest_data_cv1 <- data.frame(
+  variable = rownames(cox_summary_cv1$conf.int),
+  HR = cox_summary_cv1$conf.int[, "exp(coef)"],
+  lower = cox_summary_cv1$conf.int[, "lower .95"],
+  upper = cox_summary_cv1$conf.int[, "upper .95"],
+  p_value = cox_summary_cv1$coefficients[, "Pr(>|z|)"]
 )
 
-# Format the numbers
-forest_cv1$HR_txt <- sprintf("%.2f", forest_cv1$HR)
-
-forest_cv1$CI_txt <- sprintf(
-  "(%.2f–%.2f)",
-  forest_cv1$lower_CI,
-  forest_cv1$upper_CI
+# Create formatted labels
+forest_data_cv1$HR_CI <- sprintf(
+  "%.2f (%.2f–%.2f)",
+  forest_data_cv1$HR,
+  forest_data_cv1$lower,
+  forest_data_cv1$upper
 )
 
-forest_cv1$p_txt <- ifelse(
-  forest_cv1$p_value < 0.001,
+forest_data_cv1$p_label <- ifelse(
+  forest_data_cv1$p_value < 0.001,
   "<0.001",
-  sprintf("%.3f", forest_cv1$p_value)
+  sprintf("%.3f", forest_data_cv1$p_value)
 )
 
-# Sort variables from largest HR to smallest HR
-forest_cv1 <- forest_cv1[
-  order(forest_cv1$HR, decreasing = TRUE),
+# Sort from largest HR to smallest HR
+forest_data_cv1 <- forest_data_cv1[
+  order(forest_data_cv1$HR, decreasing = TRUE),
 ]
 
 # Preserve this order in the plot
-forest_cv1$Variable <- factor(
-  forest_cv1$Variable,
-  levels = rev(forest_cv1$Variable)
+forest_data_cv1$variable <- factor(
+  forest_data_cv1$variable,
+  levels = rev(forest_data_cv1$variable)
 )
 
-# Number of rows
-n_rows <- nrow(forest_cv1)
+# Position of the text column
+text_position <- max(
+  forest_data_cv1$upper,
+  na.rm = TRUE
+) * 1.5
 
 # Forest plot
 ggplot(
-  forest_cv1,
-  aes(
-    x = HR,
-    y = Variable
-  )
+  forest_data_cv1,
+  aes(x = HR, y = variable)
 ) +
 
-  # HR points
-  geom_point(
-    size = 2.5
+  # Reference line: HR = 1
+  geom_vline(
+    xintercept = 1,
+    linetype = "dashed",
+    linewidth = 0.6
   ) +
 
   # 95% confidence intervals
   geom_errorbarh(
     aes(
-      xmin = lower_CI,
-      xmax = upper_CI
+      xmin = lower,
+      xmax = upper
     ),
-    height = 0.20
+    height = 0.15,
+    linewidth = 0.7
   ) +
 
-  # Reference line HR = 1
-  geom_vline(
-    xintercept = 1,
-    linetype = "dashed"
+  # Hazard ratios
+  geom_point(
+    size = 3
   ) +
 
-  # HR column
+  # HR, 95% CI and p-value
   geom_text(
     aes(
-      x = 1.65,
-      label = HR_txt
+      x = text_position,
+      label = paste0(
+        HR_CI,
+        "   p = ",
+        p_label
+      )
     ),
     hjust = 0,
-    size = 4
+    size = 3.5
   ) +
 
-  # 95% CI column
-  geom_text(
-    aes(
-      x = 2.60,
-      label = CI_txt
-    ),
-    hjust = 0,
-    size = 4
-  ) +
-
-  # p-value column
-  geom_text(
-    aes(
-      x = 6.50,
-      label = p_txt
-    ),
-    hjust = 0,
-    size = 4
-  ) +
-
-  # Column headers
-  annotate(
-    "text",
-    x = 1.65,
-    y = n_rows + 0.8,
-    label = "HR",
-    hjust = 0,
-    fontface = "bold",
-    size = 4.5
-  ) +
-
-  annotate(
-    "text",
-    x = 2.60,
-    y = n_rows + 0.8,
-    label = "95% CI",
-    hjust = 0,
-    fontface = "bold",
-    size = 4.5
-  ) +
-
-  annotate(
-    "text",
-    x = 6.50,
-    y = n_rows + 0.8,
-    label = "p-value",
-    hjust = 0,
-    fontface = "bold",
-    size = 4.5
-  ) +
-
-  # Log scale with extra space on the right
-  scale_x_log10(
-    limits = c(0.45, 10),
-    breaks = c(0.5, 1, 2)
-  ) +
+  # Logarithmic HR scale
+  scale_x_log10() +
 
   labs(
     title = "Adjusted Cox model – Cardiovascular history",
     subtitle = "Subgroup: cv_history = 1",
-    x = "Hazard Ratio",
+    x = "Hazard Ratio (95% CI)",
     y = NULL
-  ) +
-
-  theme_minimal(
-    base_size = 12
-  ) +
-
-  theme(
-    plot.margin = margin(
-      t = 10,
-      r = 30,
-      b = 10,
-      l = 10
-    )
   ) +
 
   coord_cartesian(
     clip = "off"
+  ) +
+
+  theme_minimal(
+    base_size = 13
+  ) +
+
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    plot.title = element_text(face = "bold"),
+    plot.margin = margin(
+      t = 10,
+      r = 180,
+      b = 10,
+      l = 10
+    )
   )
 ```
 
