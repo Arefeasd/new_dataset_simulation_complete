@@ -1,0 +1,527 @@
+---
+title: "adjusted_cox_OMT_subgroup_analysis"
+output: html_document
+date: "2026-08-18"
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(arrow)
+library(dplyr)
+library(ggplot2)
+library(survival)
+```
+
+
+```{r}
+df_large <- read_parquet(
+"C:\\Users\\CICP\\Desktop\\My_Computer\\Professional\\Github\\new_dataset\\simulation_complete\\df_large_sim.parquet"
+)
+```
+
+**Conversion from hospitalization level to patient level**
+
+```{r}
+# Convert the dataset from the hospitalization level to the patient level:
+# keep only inclusion stays, then retain the earliest inclusion stay
+# for each patient according to inclusion_start.
+# If several stays have the same earliest date, keep only one of them.
+df_patient <- df_large |>
+  filter(inclusion_flag == TRUE) |>
+  group_by(patient_id) |>
+  slice_min(
+    order_by = inclusion_start,
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  ungroup()
+```
+
+**Cardiovascular history variables**
+
+```{r}
+# Create patient-level cardiovascular disease indicators from CIM-10 variables,
+# then combine them into a composite cardiovascular history variable.
+#
+# For each disease indicator:
+#   1 = the corresponding cardiovascular disease is present,
+#   0 = the corresponding cardiovascular disease is absent,
+#   NA = the disease status cannot be determined from the available data.
+#
+# The composite cv_history variable is coded as:
+#   1 if at least one cardiovascular condition is present,
+#   0 if all cardiovascular conditions are absent,
+#   NA if no condition is present but at least one component is missing.
+
+df_patient <- df_patient |>
+  mutate(
+    ischemic_heart_disease = case_when(
+        CIM_10_I20 == 1 |
+        CIM_10_I21 == 1 |
+        CIM_10_I22 == 1 |
+        CIM_10_I25 == 1 ~ 1,
+        TRUE ~ 0,
+    )
+  )
+
+
+df_patient <- df_patient |>
+  mutate(
+    atrial_fibrillation = case_when(
+        CIM_10_I48 == 1 ~ 1,
+        TRUE ~ 0,
+    )
+  )
+
+
+
+df_patient <- df_patient |>
+  mutate(
+    chronic_heart_failure = case_when(
+        CIM_10_I50 == 1 ~ 1,
+        TRUE ~ 0,
+    )
+  )
+
+
+df_patient <- df_patient |>
+  mutate(
+    cv_history = case_when(
+      ischemic_heart_disease == 1 |
+      atrial_fibrillation == 1 |
+      chronic_heart_failure == 1 |
+      cerebral_vascular_accident_cum == 1 ~ 1,
+      TRUE ~ 0
+      
+    )
+  )
+```
+
+**Composite severity indicator** 
+
+```{r}
+# Create a composite severity indicator based on acute respiratory failure
+# and the minimum recorded pH value:
+#   1 = acute respiratory failure is present or pH is below 7.38,
+#   0 = acute respiratory failure is absent or pH is at least 7.38,
+#   NA = severity cannot be determined from the available data.
+
+df_patient <- df_patient |>
+  mutate(severity = case_when(
+    Ins_Resp_Aigue_J96 == 1 | ph_min < 7.38 ~ 1,
+    Ins_Resp_Aigue_J96 == 0 | ph_min >= 7.38 ~ 0,
+    TRUE ~ NA_real_
+  )
+)
+```
+
+
+**Patient-level medication indicators**
+
+```{r}
+# Create patient-level medication indicators from the corresponding ATC groups
+# for beta-blockers, ACE inhibitors, ARBs,
+# and aldosterone antagonists/potassium-sparing agents.
+#
+# For each medication class:
+#   1 = at least one related ATC group is present,
+#   0 = all related ATC groups are absent,
+#   NA = medication use cannot be determined from the available data.
+
+# C07A BETA BLOCKING AGENTS
+# C07B BETA BLOCKING AGENTS AND THIAZIDES
+# C07C BETA BLOCKING AGENTS AND OTHER DIURETICS
+# C07D BETA BLOCKING AGENTS, THIAZIDES AND OTHER DIURETICS
+# C07E BETA BLOCKING AGENTS AND VASODILATORS
+# C07F BETA BLOCKING AGENTS, OTHER COMBINATIONS
+
+df_patient <- df_patient |>
+  mutate(
+    beta_blocker = case_when(
+        cum_cor_ATC_C07A == 1 |
+        cum_cor_ATC_C07B == 1 |
+        cum_cor_ATC_C07D == 1 |
+        cum_cor_ATC_C07F == 1 ~ 1,
+        
+        TRUE ~ 0
+    )
+  )
+
+# C09A ACE INHIBITORS, PLAIN
+# C09B ACE INHIBITORS, COMBINATIONS
+
+df_patient <- df_patient |>
+  mutate( ACE = 
+    case_when(
+      cum_cor_ATC_C09A == 1 |
+      cum_cor_ATC_C09B == 1 ~ 1,
+      
+      TRUE ~ 0
+    )
+  )
+
+# C09C ANGIOTENSIN II RECEPTOR BLOCKERS (ARBs), PLAIN
+# C09D ANGIOTENSIN II RECEPTOR BLOCKERS (ARBs), COMBINATIONS
+
+df_patient <- df_patient |>
+  mutate( ARB = 
+            case_when(
+              cum_cor_ATC_C09C == 1 |
+              cum_cor_ATC_C09D == 1 ~ 1,
+              
+              TRUE ~ 0
+        )
+  )
+
+
+# C03D ALDOSTERONE ANTAGONISTS AND OTHER POTASSIUM-SPARING AGENTS
+df_patient <- df_patient |>
+  mutate( Aldosterone = 
+            case_when(
+                cum_cor_ATC_C03D == 1 ~ 1,
+              TRUE ~ 0
+            )
+  )
+```
+
+**Optimal Medical Therapy score**
+
+```{r}
+# Create the Optimal Medical Therapy (OMT) score by summing:
+#   1 point for beta-blocker use,
+#   1 point for either ACE inhibitor or ARB use,
+#   1 point for aldosterone antagonist use.
+#
+# ACE inhibitors and ARBs are treated as one therapeutic component,
+# so using both does not add more than one point.
+# The resulting OMT score ranges from 0 to 3.
+df_patient <- df_patient |>
+  mutate(OMT = beta_blocker + pmax(ACE, ARB) + Aldosterone,
+         OMT = factor(OMT))
+```
+
+**Create diabetes variable**
+
+```{r}
+df_patient <- df_patient |>
+  mutate(diabetes = 
+           case_when(
+             diabetes_uncomp_cum == 1 |
+             diabetes_comp_cum == 1 ~ 1,
+             TRUE ~ 0
+           )
+         )
+```
+
+
+```{r}
+vars_cc <- c(
+  "duree_CJP_1an",
+  "CJP_1an",
+  "cv_history",
+  "AGE",
+  "gender",
+  "OMT",
+  "CCI_score",
+  "severity",
+  "oxygene_first",
+  "diabetes",
+  "kidney_disease_cum",
+  "liver_cum",
+  "metastatic_cancer_cum",
+  "ATCD_pulm_chronique",
+  "dementia_cum",
+  "Neurologic_disease_cum"
+)
+
+df_cc <- df_patient |>
+  filter(if_all(all_of(vars_cc), ~ !is.na(.)))
+```
+
+**Unadjusted Cox Model**
+
+```{r}
+cox_unadjusted <- coxph(
+  Surv(time = duree_CJP_1an, event = CJP_1an) ~ cv_history,
+  data = df_cc,
+)
+summary(cox_unadjusted)
+```
+
+```{r, echo=FALSE}
+# Extract HR and 95% CI
+cox_sum <- summary(cox_unadjusted)
+
+forest_data <- data.frame(
+  Variable = "Cardiovascular history",
+  HR = cox_sum$conf.int[, "exp(coef)"],
+  lower_CI = cox_sum$conf.int[, "lower .95"],
+  upper_CI = cox_sum$conf.int[, "upper .95"],
+  p_value = cox_sum$coefficients[, "Pr(>|z|)"]
+)
+
+
+# Forest plot
+ggplot(
+  forest_data,
+  aes(x = HR, y = Variable)
+) +
+  geom_point(size = 3) +
+  geom_errorbarh(
+    aes(xmin = lower_CI, xmax = upper_CI),
+    height = 0.15
+  ) +
+  geom_vline(
+    xintercept = 1,
+    linetype = "dashed"
+  ) +
+  scale_x_log10() +
+  labs(
+    x = "Hazard Ratio (95% CI)",
+    y = NULL,
+    title = "Unadjusted Cox proportional hazards model"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+```{r}
+cox_adjusted <- coxph(
+  Surv(time = duree_CJP_1an, event = CJP_1an) ~ cv_history +
+  AGE +
+  gender +
+  OMT +
+  oxygene_first +
+  CCI_score +
+  severity +
+  diabetes +
+  kidney_disease_cum +
+  liver_cum +
+  metastatic_cancer_cum +
+  ATCD_pulm_chronique +
+  dementia_cum +
+  Neurologic_disease_cum,
+  data = df_cc
+)
+summary(cox_adjusted)
+```
+
+```{r, echo=FALSE}
+# Extract results from the adjusted Cox model
+cox_summary <- summary(cox_adjusted)
+
+forest_data <- data.frame(
+  variable = rownames(cox_summary$conf.int),
+  HR = cox_summary$conf.int[, "exp(coef)"],
+  lower = cox_summary$conf.int[, "lower .95"],
+  upper = cox_summary$conf.int[, "upper .95"],
+  p_value = cox_summary$coefficients[, "Pr(>|z|)"]
+)
+
+# Create formatted labels
+forest_data$HR_CI <- sprintf(
+  "%.2f (%.2f–%.2f)",
+  forest_data$HR,
+  forest_data$lower,
+  forest_data$upper
+)
+
+forest_data$p_label <- ifelse(
+  forest_data$p_value < 0.001,
+  "<0.001",
+  sprintf("%.3f", forest_data$p_value)
+)
+
+# Keep the same order as in the Cox model
+forest_data$variable <- factor(
+  forest_data$variable,
+  levels = rev(forest_data$variable)
+)
+
+# Position of the text column
+text_position <- max(forest_data$upper, na.rm = TRUE) * 1.5
+
+# Forest plot
+ggplot(forest_data, aes(x = HR, y = variable)) +
+  
+  # Reference line: HR = 1
+  geom_vline(
+    xintercept = 1,
+    linetype = "dashed",
+    linewidth = 0.6
+  ) +
+  
+  # 95% confidence intervals
+  geom_errorbarh(
+    aes(xmin = lower, xmax = upper),
+    height = 0.15,
+    linewidth = 0.7
+  ) +
+  
+  # Hazard ratios
+  geom_point(
+    size = 3
+  ) +
+  
+  # HR, 95% CI and p-value
+  geom_text(
+    aes(
+      x = text_position,
+      label = paste0(
+        HR_CI,
+        "   p = ",
+        p_label
+      )
+    ),
+    hjust = 0,
+    size = 3.5
+  ) +
+  
+  # Logarithmic HR scale
+  scale_x_log10() +
+  
+  labs(
+    title = "Adjusted Cox proportional hazards model",
+    x = "Hazard Ratio (95% CI)",
+    y = NULL
+  ) +
+  
+  coord_cartesian(clip = "off") +
+  
+  theme_minimal(base_size = 13) +
+  
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    plot.title = element_text(face = "bold"),
+    plot.margin = margin(
+      t = 10,
+      r = 180,
+      b = 10,
+      l = 10
+    )
+  )
+```
+
+```{r}
+cox_subgroup_cv0 <- coxph(
+  Surv(time = duree_CJP_1an, event = CJP_1an) ~ 
+  AGE +
+  gender +
+  OMT +
+  oxygene_first +
+  CCI_score +
+  severity +
+  diabetes +
+  kidney_disease_cum +
+  liver_cum +
+  metastatic_cancer_cum +
+  ATCD_pulm_chronique +
+  dementia_cum +
+  Neurologic_disease_cum,
+  data = df_cc |> filter(cv_history == 0)
+)
+```
+
+```{r, echo=FALSE}
+# Extract results from the Cox model
+cox_sum_cv0 <- summary(cox_subgroup_cv0)
+
+forest_cv0 <- data.frame(
+  Variable = rownames(cox_sum_cv0$coefficients),
+  HR = cox_sum_cv0$conf.int[, "exp(coef)"],
+  lower_CI = cox_sum_cv0$conf.int[, "lower .95"],
+  upper_CI = cox_sum_cv0$conf.int[, "upper .95"],
+  p_value = cox_sum_cv0$coefficients[, "Pr(>|z|)"]
+)
+
+# Forest plot
+ggplot(
+  forest_cv0,
+  aes(
+    x = HR,
+    y = reorder(Variable, HR)
+  )
+) +
+  geom_point(size = 2.5) +
+  geom_errorbarh(
+    aes(
+      xmin = lower_CI,
+      xmax = upper_CI
+    ),
+    height = 0.2
+  ) +
+  geom_vline(
+    xintercept = 1,
+    linetype = "dashed"
+  ) +
+  scale_x_log10() +
+  labs(
+    title = "Adjusted Cox model – No cardiovascular history",
+    subtitle = "Subgroup: cv_history = 0",
+    x = "Hazard Ratio (95% CI)",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+```{r}
+cox_subgroup_cv1 <- coxph(
+  Surv(time = duree_CJP_1an, event = CJP_1an) ~ 
+  AGE +
+  gender +
+  OMT +
+  oxygene_first +
+  CCI_score +
+  severity +
+  diabetes +
+  kidney_disease_cum +
+  liver_cum +
+  metastatic_cancer_cum +
+  ATCD_pulm_chronique +
+  dementia_cum +
+  Neurologic_disease_cum,
+  data = df_cc |> filter(cv_history == 1)
+)
+```
+
+```{r, echo=FALSE}
+# Extract results from the Cox model
+cox_sum_cv1 <- summary(cox_subgroup_cv1)
+
+forest_cv1 <- data.frame(
+  Variable = rownames(cox_sum_cv1$coefficients),
+  HR = cox_sum_cv1$conf.int[, "exp(coef)"],
+  lower_CI = cox_sum_cv1$conf.int[, "lower .95"],
+  upper_CI = cox_sum_cv1$conf.int[, "upper .95"],
+  p_value = cox_sum_cv1$coefficients[, "Pr(>|z|)"]
+)
+
+# Forest plot
+ggplot(
+  forest_cv1,
+  aes(
+    x = HR,
+    y = reorder(Variable, HR)
+  )
+) +
+  geom_point(size = 2.5) +
+  geom_errorbarh(
+    aes(
+      xmin = lower_CI,
+      xmax = upper_CI
+    ),
+    height = 0.2
+  ) +
+  geom_vline(
+    xintercept = 1,
+    linetype = "dashed"
+  ) +
+  scale_x_log10() +
+  labs(
+    title = "Adjusted Cox model – Cardiovascular history",
+    subtitle = "Subgroup: cv_history = 1",
+    x = "Hazard Ratio (95% CI)",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 12)
+```
+
