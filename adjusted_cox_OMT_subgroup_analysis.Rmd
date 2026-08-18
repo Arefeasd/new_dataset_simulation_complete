@@ -248,39 +248,118 @@ summary(cox_unadjusted)
 ```
 
 ```{r, echo=FALSE}
-# Extract HR and 95% CI
-cox_sum <- summary(cox_unadjusted)
+# Extract results from the unadjusted Cox model
+cox_summary_unadjusted <- summary(cox_unadjusted)
 
-forest_data <- data.frame(
-  Variable = "Cardiovascular history",
-  HR = cox_sum$conf.int[, "exp(coef)"],
-  lower_CI = cox_sum$conf.int[, "lower .95"],
-  upper_CI = cox_sum$conf.int[, "upper .95"],
-  p_value = cox_sum$coefficients[, "Pr(>|z|)"]
+forest_data_unadjusted <- data.frame(
+  variable = rownames(cox_summary_unadjusted$conf.int),
+  HR = cox_summary_unadjusted$conf.int[, "exp(coef)"],
+  lower = cox_summary_unadjusted$conf.int[, "lower .95"],
+  upper = cox_summary_unadjusted$conf.int[, "upper .95"],
+  p_value = cox_summary_unadjusted$coefficients[, "Pr(>|z|)"]
 )
 
+# Create formatted labels
+forest_data_unadjusted$HR_CI <- sprintf(
+  "%.2f (%.2f–%.2f)",
+  forest_data_unadjusted$HR,
+  forest_data_unadjusted$lower,
+  forest_data_unadjusted$upper
+)
+
+forest_data_unadjusted$p_label <- ifelse(
+  forest_data_unadjusted$p_value < 0.001,
+  "<0.001",
+  sprintf("%.3f", forest_data_unadjusted$p_value)
+)
+
+# Sort from largest HR to smallest HR
+forest_data_unadjusted <- forest_data_unadjusted[
+  order(forest_data_unadjusted$HR, decreasing = TRUE),
+]
+
+# Preserve this order in the plot
+forest_data_unadjusted$variable <- factor(
+  forest_data_unadjusted$variable,
+  levels = rev(forest_data_unadjusted$variable)
+)
+
+# Position of the text column
+text_position <- max(
+  forest_data_unadjusted$upper,
+  na.rm = TRUE
+) * 1.5
 
 # Forest plot
 ggplot(
-  forest_data,
-  aes(x = HR, y = Variable)
+  forest_data_unadjusted,
+  aes(x = HR, y = variable)
 ) +
-  geom_point(size = 3) +
-  geom_errorbarh(
-    aes(xmin = lower_CI, xmax = upper_CI),
-    height = 0.15
-  ) +
+
+  # Reference line: HR = 1
   geom_vline(
     xintercept = 1,
-    linetype = "dashed"
+    linetype = "dashed",
+    linewidth = 0.6
   ) +
+
+  # 95% confidence intervals
+  geom_errorbarh(
+    aes(
+      xmin = lower,
+      xmax = upper
+    ),
+    height = 0.15,
+    linewidth = 0.7
+  ) +
+
+  # Hazard ratios
+  geom_point(
+    size = 3
+  ) +
+
+  # HR, 95% CI and p-value
+  geom_text(
+    aes(
+      x = text_position,
+      label = paste0(
+        HR_CI,
+        "   p = ",
+        p_label
+      )
+    ),
+    hjust = 0,
+    size = 3.5
+  ) +
+
+  # Logarithmic HR scale
   scale_x_log10() +
+
   labs(
+    title = "Unadjusted Cox proportional hazards model",
     x = "Hazard Ratio (95% CI)",
-    y = NULL,
-    title = "Unadjusted Cox proportional hazards model"
+    y = NULL
   ) +
-  theme_minimal(base_size = 12)
+
+  coord_cartesian(
+    clip = "off"
+  ) +
+
+  theme_minimal(
+    base_size = 13
+  ) +
+
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    plot.title = element_text(face = "bold"),
+    plot.margin = margin(
+      t = 10,
+      r = 180,
+      b = 10,
+      l = 10
+    )
+  )
 ```
 
 ```{r}
